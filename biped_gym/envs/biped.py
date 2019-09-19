@@ -4,6 +4,7 @@ from ros2_control_interfaces.msg import JointControl
 from rosgraph_msgs.msg import Clock as RosClock
 from sensor_msgs.msg import JointState
 from std_srvs.srv import Empty
+from gazebo_msgs.srv import DeleteEntity
 from sensor_msgs.msg import Imu
 from parameter_server_interfaces.srv import GetAllJoints
 # Used for publishing mara joint angles.
@@ -44,7 +45,7 @@ class BipedEnv(gym.Env):
         # Set the path of the corresponding URDF file
         if self.realSpeed:
             urdf = "biped.urdf"
-            urdfPath = get_prefix_path(
+            self.urdfPath = get_prefix_path(
                 "lobot_description") + "/share/lobot_description/robots/" + urdf
         else:
             print("Non real speed not yet supported. Use real speed instead. ")
@@ -115,10 +116,10 @@ class BipedEnv(gym.Env):
         m_jointOrder = copy.deepcopy(JOINT_ORDER)
 
         # Initialize target end effector position
-        self.environment = {
+        self.environment = {urdfPath
             'jointOrder': m_jointOrder,
             'reset_conditions': reset_condition,
-            'tree_path': urdfPath,
+            'tree_path': self.urdfPath,
             'end_effector_points': EE_POINTS,
         }
 
@@ -130,7 +131,7 @@ class BipedEnv(gym.Env):
         # self._imu_sub = self.node.create_subscription(JointState, "/lobot_IMU_controller/out", self.imu_callback, qos_profile_sensor_data)
         # self._sub = self.node.create_subscription(JointTrajectoryControllerState, JOINT_SUBSCRIBER, self.observation_callback, qos_profile=qos_profile_sensor_data)
         self.reset_sim = self.node.create_client(Empty, '/reset_simulation')
-
+        self.delete_entity = self.node.create_client(DeleteEntity, '/delete_entity')
         self.numJoints = len(JOINT_ORDER)
         # Initialize a KDL Jacobian solver from the chain.
         # self.jacSolver = ChainJntToJacSolver(self.mara_chain)
@@ -177,6 +178,16 @@ class BipedEnv(gym.Env):
     def set_episode_size(self, episode_size):
         self.max_episode_steps = episode_size
 
+    def get_time_from_time_msg(self, time_msg):
+        secStr = str(time_msg.sec)
+        nanoSecStr = str(time_msg.nanosec)
+        if(len(nanoSecStr) < 9):
+            lengthDiff = 9-len(nanoSecStr)
+            for i in range(1,lengthDiff):
+                nanoSecStr = "0" + nanoSecStr
+        msg_time = int(secStr + nanoSecStr)
+        return msg_time
+
     def take_observation(self):
         """
         Take observation from the environment and return it.
@@ -187,17 +198,26 @@ class BipedEnv(gym.Env):
         obs_message = self._observation_msg
 
         # Check that the observation is not prior to the action
-        while obs_message is None or int(str(self._observation_msg.header.stamp.sec)+(str(self._observation_msg.header.stamp.nanosec))) < self.ros_clock:
-            # msg_time = int(str(self._observation_msg.header.stamp.sec)+(str(self._observation_msg.header.stamp.nanosec)))
-            if(obs_message is None):
-                print("I am in obs_message is none")
-            else:
-                msg_time = int(str(self._observation_msg.header.stamp.sec)+(str(self._observation_msg.header.stamp.nanosec)))
+        if(obs_message != None): 
+            msg_time = self.get_time_from_time_msg(obs_message.header.stamp)
+        else:
+            msg_time = -1
+        
+        while obs_message is None or msg_time < self.ros_clock:
+            if(obs_message is not None):
                 if(msg_time < self.ros_clock):
                     print("observation outdated, msg time: %d, old time: %d" %(msg_time, self.ros_clock) )
-            # print("I am in obs_message is none")
+                    print("Sec: %d" % self._observation_msg.header.stamp.sec)
+                    print("Nsec: %d" % self._observation_msg.header.stamp.nanosec) 
+            # else:
+                # print("I am in obs_message is none")
             rclpy.spin_once(self.node)
             obs_message = self._observation_msg
+
+            if(obs_message != None): 
+                msg_time = self.get_time_from_time_msg(obs_message.header.stamp)
+            else:
+                msg_time = -1
 
         # print("Observation taken!")
         lastObservations = ut_biped.processObservations(obs_message, self.environment)
@@ -252,12 +272,23 @@ class BipedEnv(gym.Env):
         self.iterator = 0
 
         if self.reset_jnts is True:
-            # reset simulation
+            # reset simulation and respawn robot
             while not self.reset_sim.wait_for_service(timeout_sec=1.0):
                 self.node.get_logger().info('/reset_simulation service not available, waiting again...')
 
             reset_future = self.reset_sim.call_async(Empty.Request())
+            deleteEntityReq = DeleteEntity.Request()
+            deleteEntityReq.name = 'lobot'
+            delete_entity_future = self.delete_entity.call_async(deleteEntityReq)
             rclpy.spin_until_future_complete(self.node, reset_future)
+            rclpy.spin_until_future_complete(self.node, delete_entity_future)
+            # spawn new robot, attempt 5 times
+            for x in range(1,5):
+                spawn_result = ut_biped.spawn_robot(self.urdfPath, 'lobot', self.node)
+                if(spawn_result == False):
+                    self.node.get_logger().error("Unable to spawn robot in gazebo, retrying..")
+                else:
+                    break
         self.ros_clock = self._sim_time
         # self.ros_clock = rclpy.clock.Clock(clock_type=ClockType.ROS_TIME).now().nanoseconds
         # self.ros_clock = self._sim_time

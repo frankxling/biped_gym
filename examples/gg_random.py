@@ -14,7 +14,17 @@ env = gym.make('Biped-v0')
 
 
 # time.sleep(6)
+env.reset()
+count = 0
 while True:
     # take a random action
+    if(count < 10):
+        count = count +1
+    else:
+        env.reset()
+        time.sleep(2)
+        print("resetting environment")
+        count =0
     observation, reward, done, info = env.step(env.action_space.sample())
-    time.sleep(1)
+    # For actual implementation please do not sleep here, your observation will be outdated by the time the next loop comes around
+    time.sleep(0.2)
