@@ -85,7 +85,7 @@ def spawn_robot(urdfPath, robotName, node):
             if srv_call.done():
                 node.get_logger().info('Spawn status: %s' % srv_call.result().status_message)
                 break
-            rclpy.spin_once(node)
+            rclpy.spin_until_future_complete(node, srv_call)
         return srv_call.result().success
     node.get_logger().error(
         'Service %s/spawn_entity unavailable. Was Gazebo started with GazeboRosFactory?')

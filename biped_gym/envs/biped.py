@@ -116,7 +116,7 @@ class BipedEnv(gym.Env):
         m_jointOrder = copy.deepcopy(JOINT_ORDER)
 
         # Initialize target end effector position
-        self.environment = {urdfPath
+        self.environment = {
             'jointOrder': m_jointOrder,
             'reset_conditions': reset_condition,
             'tree_path': self.urdfPath,
@@ -270,17 +270,14 @@ class BipedEnv(gym.Env):
         Reset the agent for a particular experiment condition.
         """
         self.iterator = 0
-
         if self.reset_jnts is True:
-            # reset simulation and respawn robot
-            while not self.reset_sim.wait_for_service(timeout_sec=1.0):
-                self.node.get_logger().info('/reset_simulation service not available, waiting again...')
+            # Respawn robot
 
-            reset_future = self.reset_sim.call_async(Empty.Request())
+            while not self.delete_entity.wait_for_service(timeout_sec=1.0):
+                self.node.get_logger().info('/delete_entity service not available, waiting again...')
             deleteEntityReq = DeleteEntity.Request()
             deleteEntityReq.name = 'lobot'
             delete_entity_future = self.delete_entity.call_async(deleteEntityReq)
-            rclpy.spin_until_future_complete(self.node, reset_future)
             rclpy.spin_until_future_complete(self.node, delete_entity_future)
             # spawn new robot, attempt 5 times
             for x in range(1,5):
@@ -289,6 +286,11 @@ class BipedEnv(gym.Env):
                     self.node.get_logger().error("Unable to spawn robot in gazebo, retrying..")
                 else:
                     break
+            # reset simulation
+            while not self.reset_sim.wait_for_service(timeout_sec=1.0):
+                self.node.get_logger().info('/reset_simulation service not available, waiting again...')
+            reset_future = self.reset_sim.call_async(Empty.Request())
+            rclpy.spin_until_future_complete(self.node, reset_future)
         self.ros_clock = self._sim_time
         # self.ros_clock = rclpy.clock.Clock(clock_type=ClockType.ROS_TIME).now().nanoseconds
         # self.ros_clock = self._sim_time
