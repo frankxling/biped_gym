@@ -14,19 +14,28 @@ pip3 install -e .
 ```
 
 ## 3. Run the example script 
+In terminal #1, launch the simulation. 
 ```
 rosbiped
 ros2 launch lobot_control_main launch_all.launch.py
+```
+In terminal #2, run the script
+```
 cd ~/biped_gym/examples
 python3 gg_random.py
 ```
-#### Note
-1. As of 26/9/2019 the gazebo launching needs to be done separately due to debugging concerns. 
+#### Notes
+1. You can use multi-tabbed terminals to run the script for easier management, using tab 1 to run the simulation and tab 2 to run the script
+  - Ctrl + Alt + T to launch a terminal
+  - Ctrl + Shift + T to launch new tab
+  - Alt + \<number\> to change tab. E.g. Alt + 1 to change to first tab
+  
+2. As of 26/9/2019 the gazebo launching needs to be done separately due to debugging concerns. 
 The python debugger will simply not work when launching other processes as part of the python script, and so we try to make
 the environment 1 process for now.
 Definitely needs to be changed in the future, not sure when.
 
-2. There is currently a bug where the controllers and the robot plugins do not discover each other quickly enough.
+3. There is currently a bug where the controllers and the robot plugins do not discover each other quickly enough.
 This causes the robot to seem like it is not controlled when it is spawned. You might need to wait for some time before 
 they discover each other and the robot move into a fixed position. This bug is partially beyond our control as some of it
 has to do with the discovery mechanism of the ROS publisher/subscribers.
