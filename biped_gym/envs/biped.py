@@ -22,12 +22,10 @@ import time
 import gym
 import copy
 import os
+import threading
 gym.logger.set_level(40)  # hide warnings
 
 class BipedEnv(gym.Env):
-    """
-    TODO. Define the environment.
-    """
 
     def __init__(self):
         """
@@ -50,25 +48,8 @@ class BipedEnv(gym.Env):
         else:
             print("Non real speed not yet supported. Use real speed instead. ")
 
-        # If not in debug mode, launch all the stuff
-        if self.debug == False:
-            main_package_name = 'lobot_control_main'
-            control_main_share_path = get_package_share_directory(main_package_name)
-            # Launch the param server
-            param_server = IncludeLaunchDescription(PythonLaunchDescriptionSource(
-                os.path.join(control_main_share_path, 'launch', 'params_server.launch.py')))
-            self.param_subp = ut_launch.startLaunchServiceProcess(param_server)
-
-            # Launch the robot spawner and gazebo
-            spawn_robot = IncludeLaunchDescription(PythonLaunchDescriptionSource(
-                os.path.join(control_main_share_path, 'launch', 'spawn_lobot.launch.py')
-            ))
-            self.gazebo_subp = ut_launch.startLaunchServiceProcess(spawn_robot)
-            # Launch the controls
-            control_main_exec = IncludeLaunchDescription(PythonLaunchDescriptionSource(
-                os.path.join(control_main_share_path, 'launch', 'launch_main_exec.launch.py')
-            ))
-            self.control_subp = ut_launch.startLaunchServiceProcess(control_main_exec)
+        # TODO: Include launch logic here, refer to code from the .launch.py files
+        # Note that after including the launch logic the code will no longer be debuggable due to multi process stuff
 
         # Create the node after the new ROS_DOMAIN_ID is set in generate_launch_description()
         rclpy.init()
@@ -126,11 +107,21 @@ class BipedEnv(gym.Env):
         # Subscribe to the appropriate topics, taking into account the particular robot
         self._pub = self.node.create_publisher(JointControl, JOINT_PUBLISHER, qos_profile=qos_profile_sensor_data)
         self._sub = self.node.create_subscription(JointState, "/joint_states", self.observation_callback, qos_profile_sensor_data)
-        self._sub_clock = self.node.create_subscription(RosClock, '/clock', self.clock_callback, qos_profile=qos_profile_sensor_data)
 
+        # TODO: Make the clock node run on a separate thread so weird issues like outdated clock can stop happening
+        self.lock = threading.Lock()
+        self.clock_node = rclpy.create_node(self.__class__.__name__+"_clock")
+        self._sub_clock = self.clock_node.create_subscription(RosClock, '/clock', self.clock_callback, qos_profile=qos_profile_sensor_data)
+        self.exec = rclpy.executors.MultiThreadedExecutor()
+        self.exec.add_node(self.clock_node)
+        t1 = threading.Thread(target=self.spinClockNode, daemon=True)
+        t1.start()
         # self._imu_sub = self.node.create_subscription(JointState, "/lobot_IMU_controller/out", self.imu_callback, qos_profile_sensor_data)
         # self._sub = self.node.create_subscription(JointTrajectoryControllerState, JOINT_SUBSCRIBER, self.observation_callback, qos_profile=qos_profile_sensor_data)
-        self.reset_sim = self.node.create_client(Empty, '/reset_simulation')
+        self._reset_sim = self.node.create_client(Empty, '/reset_simulation')
+        self._physics_pauser = self.node.create_client(Empty, '/pause_physics')
+        self._robot_resetter = self.node.create_client(Empty, '/lobot/reset')
+        self._physics_unpauser = self.node.create_client(Empty, '/unpause_physics')
         self.delete_entity = self.node.create_client(DeleteEntity, '/delete_entity')
         self.numJoints = len(JOINT_ORDER)
         # Initialize a KDL Jacobian solver from the chain.
@@ -173,7 +164,8 @@ class BipedEnv(gym.Env):
         self._collision_msg = message
 
     def clock_callback(self, message):
-        self._sim_time = int(str(message.clock.sec)+(str(message.clock.nanosec)))
+        with self.lock:
+            self._sim_time = self.get_time_from_time_msg(message.clock)
 
     def set_episode_size(self, episode_size):
         self.max_episode_steps = episode_size
@@ -193,7 +185,7 @@ class BipedEnv(gym.Env):
         Take observation from the environment and return it.
         :return: state.
         """
-        # # # # Take an observation
+        # Take an observation
         rclpy.spin_once(self.node)
         obs_message = self._observation_msg
 
@@ -203,12 +195,12 @@ class BipedEnv(gym.Env):
         else:
             msg_time = -1
         
-        while obs_message is None or msg_time < self.ros_clock:
+        while obs_message is None or msg_time < self.last_action_send_time:
             if(obs_message is not None):
-                if(msg_time < self.ros_clock):
-                    print("observation outdated, msg time: %d, old time: %d" %(msg_time, self.ros_clock) )
-                    print("Sec: %d" % self._observation_msg.header.stamp.sec)
-                    print("Nsec: %d" % self._observation_msg.header.stamp.nanosec) 
+                if(msg_time < self.last_action_send_time):
+                    print("observation outdated, msg time: %d, last action send time: %d" %(msg_time, self.last_action_send_time) )
+                    # print("Sec: %d" % self._observation_msg.header.stamp.sec)
+                    # print("Nsec: %d" % self._observation_msg.header.stamp.nanosec) 
             # else:
                 # print("I am in obs_message is none")
             rclpy.spin_once(self.node)
@@ -244,11 +236,10 @@ class BipedEnv(gym.Env):
         self.iterator+=1
         # Execute "action"
         msg = JointControl()
-        msg.joint_names = self.environment['jointOrder']
-        msg.desired_positions = action.tolist()
+        msg.joints = self.environment['jointOrder']
+        msg.goals = action.tolist()
         self._pub.publish(msg)
-
-        self.ros_clock = self._sim_time
+        self.last_action_send_time = self._sim_time
 
         # Take an observation
         obs = self.take_observation()
@@ -270,36 +261,38 @@ class BipedEnv(gym.Env):
         Reset the agent for a particular experiment condition.
         """
         self.iterator = 0
+        simTimeBeforeReset = self._sim_time
         if self.reset_jnts is True:
-            # Respawn robot
+            # pause simulation
+            while not self._physics_pauser.wait_for_service(timeout_sec=1.0):
+                self.node.get_logger().info('/pause_physics service not available, waiting again...')
+            pause_future = self._physics_pauser.call_async(Empty.Request())
+            print("Pausing physics")
+            rclpy.spin_until_future_complete(self.node, pause_future)
 
-            while not self.delete_entity.wait_for_service(timeout_sec=1.0):
-                self.node.get_logger().info('/delete_entity service not available, waiting again...')
-            deleteEntityReq = DeleteEntity.Request()
-            deleteEntityReq.name = 'lobot'
-            delete_entity_future = self.delete_entity.call_async(deleteEntityReq)
-            rclpy.spin_until_future_complete(self.node, delete_entity_future)
-            # spawn new robot, attempt 5 times
-            for x in range(1,5):
-                spawn_result = ut_biped.spawn_robot(self.urdfPath, 'lobot', self.node)
-                if(spawn_result == False):
-                    self.node.get_logger().error("Unable to spawn robot in gazebo, retrying..")
-                else:
-                    break
+            # reset controllers
+            while not self._robot_resetter.wait_for_service(timeout_sec=1.0):
+                self.node.get_logger().info('/lobot/reset service not available, waiting again...')
+            reset_robot_future = self._robot_resetter.call_async(Empty.Request())
+            print("Resetting controller initial positions")
+            rclpy.spin_until_future_complete(self.node, reset_robot_future)
+
             # reset simulation
-            while not self.reset_sim.wait_for_service(timeout_sec=1.0):
+            while not self._reset_sim.wait_for_service(timeout_sec=1.0):
                 self.node.get_logger().info('/reset_simulation service not available, waiting again...')
-            reset_future = self.reset_sim.call_async(Empty.Request())
+            reset_future = self._reset_sim.call_async(Empty.Request())
+            print("Resetting simulation")
             rclpy.spin_until_future_complete(self.node, reset_future)
-        self.ros_clock = self._sim_time
-        # self.ros_clock = rclpy.clock.Clock(clock_type=ClockType.ROS_TIME).now().nanoseconds
-        # self.ros_clock = self._sim_time
+            
+            # unpause simulation
+            while not self._physics_unpauser.wait_for_service(timeout_sec=1.0):
+                self.node.get_logger().info('/unpause_physics service not available, waiting again...')
+            unpause_future = self._physics_unpauser.call_async(Empty.Request())
+            rclpy.spin_until_future_complete(self.node, unpause_future)
+            print("Unpausing simulation")
 
-        # Take an observation
-        obs = self.take_observation()
-
-        # Return the corresponding observation
-        return obs
+    def spinClockNode(self):
+        self.exec.spin()
 
     def close(self):
         print("Closing " + self.__class__.__name__ + " environment.")

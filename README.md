@@ -17,7 +17,7 @@ pip3 install -e .
 In terminal #1, launch the simulation. 
 ```
 rosbiped
-ros2 launch lobot_control_main launch_all.launch.py
+ros2 launch lobot_simulation launch_all.launch.py
 ```
 In terminal #2, run the script
 ```

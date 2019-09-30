@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """ NOT A REAL TRAINING SCRIPT
 Please check the README.md in located in this same folder
 for an explanation of this script"""
@@ -14,17 +15,28 @@ env = gym.make('Biped-v0')
 
 
 # time.sleep(6)
-# env.reset()
+env.reset()
 count = 0
+# while True:
+#     # take a random action
+#     # if(count < 5):
+#     #     count = count +1
+#     # else:
+#     #     env.reset()
+#     #     print("resetting environment")
+#     #     time.sleep(3)
+#     #     count =0
+#     observation, reward, done, info = env.step(env.action_space.sample())
+#     # For actual implementation please do not sleep here, your observation will be outdated by the time the next loop comes around
+#     time.sleep(0.5)
+
 while True:
-    # take a random action
-    # if(count < 5):
-    #     count = count +1
-    # else:
-    #     env.reset()
-    #     print("resetting environment")
-    #     time.sleep(3)
-    #     count =0
-    observation, reward, done, info = env.step(env.action_space.sample())
-    # For actual implementation please do not sleep here, your observation will be outdated by the time the next loop comes around
-    time.sleep(0.5)
+    for x in range(5):
+        observation, reward, done, info = env.step(env.action_space.sample())
+        time.sleep(0.5)
+    time.sleep(1.0)
+    print("-------------Resetting environment---------------")
+    env.reset()
+    print("-------------Reset finished----------------")
+    time.sleep(2.0)
+
