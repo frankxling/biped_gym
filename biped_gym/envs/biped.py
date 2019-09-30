@@ -14,6 +14,7 @@ from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
 import rclpy
+import builtin_interfaces
 from gym.utils import seeding
 from biped_gym.utils import ut_generic, ut_launch, ut_biped
 from gym import utils, spaces
@@ -39,7 +40,6 @@ class BipedEnv(gym.Env):
         self.debug = args.debug
         self.multiInstance = args.multiInstance
         self.port = args.port
-
         # Set the path of the corresponding URDF file
         if self.realSpeed:
             urdf = "biped.urdf"
@@ -149,6 +149,7 @@ class BipedEnv(gym.Env):
 
         # Set the time source
         self._sim_time = 0
+        self._sim_time_msg = builtin_interfaces.msg.Time()
 
     def observation_callback(self, message):
         self._observation_msg = message
@@ -166,6 +167,7 @@ class BipedEnv(gym.Env):
     def clock_callback(self, message):
         with self.lock:
             self._sim_time = self.get_time_from_time_msg(message.clock)
+            self._sim_time_msg = message.clock
 
     def set_episode_size(self, episode_size):
         self.max_episode_steps = episode_size
@@ -238,8 +240,9 @@ class BipedEnv(gym.Env):
         msg = JointControl()
         msg.joints = self.environment['jointOrder']
         msg.goals = action.tolist()
-        self._pub.publish(msg)
         self.last_action_send_time = self._sim_time
+        msg.header.stamp = self._sim_time_msg
+        self._pub.publish(msg)
 
         # Take an observation
         obs = self.take_observation()
@@ -261,7 +264,6 @@ class BipedEnv(gym.Env):
         Reset the agent for a particular experiment condition.
         """
         self.iterator = 0
-        simTimeBeforeReset = self._sim_time
         if self.reset_jnts is True:
             # pause simulation
             while not self._physics_pauser.wait_for_service(timeout_sec=1.0):
