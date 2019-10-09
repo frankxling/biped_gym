@@ -13,7 +13,7 @@ cd ~/biped_gym
 pip3 install -e .
 ```
 
-## 3. Run the example script 
+## 3a. Run the example script (biped)
 In terminal #1, launch the simulation. 
 ```
 rosbiped
@@ -22,8 +22,21 @@ ros2 launch lobot_simulation launch_all.launch.py
 In terminal #2, run the script
 ```
 cd ~/biped_gym/examples
-python3 gg_random.py
+python3 biped_random.py
 ```
+
+## 3b. Run the example script (robot arm)
+In terminal #1, launch the simulation. 
+```
+rosbiped
+ros2 launch arm_simulation launch_all.launch.py
+```
+In terminal #2, run the script
+```
+cd ~/biped_gym/examples
+python3 robot_arm_random.py
+```
+
 #### Notes
 1. You can use multi-tabbed terminals to run the script for easier management, using tab 1 to run the simulation and tab 2 to run the script
   - Ctrl + Alt + T to launch a terminal
